@@ -4,14 +4,22 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local Remotes = ReplicatedStorage:WaitForChild("Remotes")
-local SwingEvent = Remotes:WaitForChild("RequestSwing")
-local EquipEvent = ReplicatedStorage:WaitForChild("RequestEquipSlot")
-local DropEvent = Remotes:WaitForChild("RequestDrop")
+local playerGui = player:WaitForChild("PlayerGui")
 
-local Hub = workspace:WaitForChild("Hub")
-local Guardians = Hub:WaitForChild("Guardians")
-local ResourceField = Hub:WaitForChild("ResourceField")
+-- Safe remote folder & event fetching
+local remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
+if not remotes then
+	warn("Remotes folder not found! Check game structure.")
+	return
+end
+
+local SwingEvent = remotes:WaitForChild("RequestSwing", 5)
+local EquipEvent = remotes:WaitForChild("RequestEquipSlot", 5)
+local DropEvent = remotes:WaitForChild("RequestDrop", 5)
+
+local Hub = workspace:WaitForChild("Hub", 5)
+local Guardians = Hub and Hub:WaitForChild("Guardians", 5)
+local ResourceField = Hub and Hub:WaitForChild("ResourceField", 5)
 
 ----------------------------------------------------------------
 -- Settings & Config
@@ -150,17 +158,17 @@ local MODES = {
 }
 
 local function equip(slot)
-	if not slot or slot == equipped then return end
+	if not slot or not EquipEvent or slot == equipped then return end
 	EquipEvent:FireServer(slot)
 	equipped = slot
 	task.wait(0.3)
 end
 
 ----------------------------------------------------------------
--- AutoFarm Logic for Mobs (Smooth Side-to-Side Sway in Air)
+-- AutoFarm Logic for Mobs (Swaying in air above slime)
 ----------------------------------------------------------------
 local function runMobAutoFarm()
-	local mobs = Guardians
+	if not Guardians then return end
 	local closestDist = math.huge
 	local closestEntry = nil
 	local closestPos = nil
@@ -169,7 +177,7 @@ local function runMobAutoFarm()
 	local hum = getHumanoid()
 	if not hrp or not hum then return end
 
-	for _, v in ipairs(mobs:GetChildren()) do
+	for _, v in ipairs(Guardians:GetChildren()) do
 		if MODES.Mobs.isCandidate(v) and mobAlive(v) then
 			local pos = MODES.Mobs.position(v)
 			if pos and pos.Y >= MIN_Y_POSITION then
@@ -190,8 +198,6 @@ local function runMobAutoFarm()
 		hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
 
 		local direction = (closestPos - hrp.Position).Unit
-		
-		-- Create a perpendicular right vector for side-to-side swaying
 		local rightVector = direction:Cross(Vector3.new(0, 1, 0))
 		if rightVector.Magnitude == 0 then
 			rightVector = Vector3.new(1, 0, 0)
@@ -199,7 +205,6 @@ local function runMobAutoFarm()
 			rightVector = rightVector.Unit
 		end
 
-		-- Sine wave oscillation for smooth side-to-side sway motion over time
 		local swayAmount = math.sin(tick() * 5) * 2.5
 		local newPosition = closestPos - (direction * 2.5) + (rightVector * swayAmount) + Vector3.new(0, 2.5, 0)
 		
@@ -208,7 +213,7 @@ local function runMobAutoFarm()
 		if (tick() - Config.Timestamps.LastHit >= Config.Timestamps.HitCooldown) then
 			Config.Timestamps.LastHit = tick()
 			local swingTarget = MODES.Mobs.swingTarget(closestEntry)
-			if swingTarget then
+			if swingTarget and SwingEvent then
 				SwingEvent:FireServer(swingTarget)
 			end
 		end
@@ -277,7 +282,7 @@ end
 
 local function pickResourceTarget(mode)
 	local hrp = getRoot()
-	if not hrp then return nil end
+	if not hrp or not mode.folder then return nil end
 	local now = os.clock()
 
 	local function search(ignoreSkipped)
@@ -344,7 +349,9 @@ local function resourceFarmLoop(id)
 					placeNearResource(mode, entry)
 				end
 
-				SwingEvent:FireServer(swingTarget)
+				if SwingEvent then
+					SwingEvent:FireServer(swingTarget)
+				end
 				task.wait(SWING_DELAY_RES)
 			end
 
@@ -413,7 +420,7 @@ local function setDropEnabled(state)
 
 	if dropEnabled then
 		spawn(function()
-			while dropEnabled do
+			while dropEnabled and DropEvent do
 				pcall(function()
 					DropEvent:FireServer(dropItemName, 1)
 				end)
@@ -458,7 +465,6 @@ end
 ----------------------------------------------------------------
 -- GUI Construction
 ----------------------------------------------------------------
-local playerGui = player:WaitForChild("PlayerGui")
 local old = playerGui:FindFirstChild("FarmGui")
 if old then old:Destroy() end
 
