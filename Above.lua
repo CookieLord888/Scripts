@@ -16,11 +16,11 @@ local ResourceField = Hub:WaitForChild("ResourceField")
 ----------------------------------------------------------------
 -- Settings
 ----------------------------------------------------------------
-local STAND_DISTANCE = 4          -- how far from the target you stand
-local SIDE_OFFSET = 2             -- shifts you slightly to the side so the target is in front of you
-local REPOSITION_DIST = 8         -- re-tween if the target gets farther than this
-local CLOSE_PROXIMITY = 1.5       -- re-tween if the target gets too close
-local TWEEN_SPEED = 22            -- studs per second for smooth sliding movement
+local STAND_DISTANCE = 4          -- how far from the target you stand (resources)
+local SIDE_OFFSET = 2             -- shifts you slightly to the side (resources)
+local MOB_HEIGHT_OFFSET = 8       -- safe height above the slime so you don't die
+local REPOSITION_DIST = 10        -- re-position if the slime moves too far
+local TWEEN_SPEED = 24            -- studs per second for smooth movement
 local SWING_DELAY_MOBS = 0.1      -- delay between swings for mobs
 local SWING_DELAY_RES = 0         -- delay between swings for resources
 local TOGGLE_KEY = Enum.KeyCode.K
@@ -59,6 +59,26 @@ local activeTween = nil
 local dropEnabled = false
 local dropItemName = "IronOre"
 local dropSpeed = 0.1
+
+----------------------------------------------------------------
+-- Fly Control Helpers (Turns built-in/custom Fly on/off)
+----------------------------------------------------------------
+local function setFlyEnabled(state)
+	local char = player.Character
+	if not char then return end
+	
+	-- Checks common remote names or attributes for enabling flight in games
+	local flyRemote = Remotes:FindFirstChild("RequestFly") or Remotes:FindFirstChild("Fly") or Remotes:FindFirstChild("ToggleFly")
+	if flyRemote then
+		pcall(function()
+			flyRemote:FireServer(state)
+		end)
+	end
+
+	-- Alternative fallback: toggle custom BodyVelocity/BodyPosition float if needed, 
+	-- or toggle standard game state attributes if used by the server
+	char:SetAttribute("Flying", state)
+end
 
 ----------------------------------------------------------------
 -- Helpers
@@ -154,7 +174,7 @@ local function equip(slot)
 	task.wait(0.3)
 end
 
--- Smoothly tween/slide on CommandLine/floor near the target
+-- Movement positioning
 local function moveToTarget(mode, entry)
 	local char = player.Character
 	local root = getRoot()
@@ -167,53 +187,59 @@ local function moveToTarget(mode, entry)
 		activeTween = nil
 	end
 
-	local away = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
-	if away.Magnitude < 0.1 then
-		away = Vector3.new(1, 0, 0)
+	local endCFrame
+
+	if shownTab == "Mobs" then
+		-- Position directly above the slime with a safe height offset so you don't take damage
+		local hoverPos = targetPos + Vector3.new(0, MOB_HEIGHT_OFFSET, 0)
+		-- Look down and slightly across at the slime
+		endCFrame = CFrame.lookAt(hoverPos, targetPos)
 	else
-		away = away.Unit
-	end
+		-- Ground positioning for resources
+		local away = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
+		if away.Magnitude < 0.1 then
+			away = Vector3.new(1, 0, 0)
+		else
+			away = away.Unit
+		end
 
-	local sideVec = Vector3.new(-away.Z, 0, away.X)
-	local standXZ = targetPos + (away * STAND_DISTANCE) + (sideVec * SIDE_OFFSET)
+		local sideVec = Vector3.new(-away.Z, 0, away.X)
+		local standXZ = targetPos + (away * STAND_DISTANCE) + (sideVec * SIDE_OFFSET)
 
-	local ignore = { char, entry }
-	if mode.excludeFolder then
-		table.insert(ignore, mode.folder)
-	end
+		local ignore = { char, entry }
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.IgnoreWater = true
 
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.IgnoreWater = true
+		local groundY = targetPos.Y
+		local rayOrigin = Vector3.new(standXZ.X, targetPos.Y + 6, standXZ.Z)
+		local rayDirection = Vector3.new(0, -25, 0)
 
-	local groundY = targetPos.Y
-	local rayOrigin = Vector3.new(standXZ.X, targetPos.Y + 6, standXZ.Z)
-	local rayDirection = Vector3.new(0, -25, 0)
-
-	for i = 1, 3 do
-		params.FilterDescendantsInstances = ignore
-		local hit = workspace:Raycast(rayOrigin, rayDirection, params)
-		if hit then
-			local hitPart = hit.Instance
-			local nameLower = hitPart.Name:lower()
-			if nameLower:find("tree") or nameLower:find("leaf") or nameLower:find("branch") or nameLower:find("foliage") then
-				table.insert(ignore, hitPart)
+		for i = 1, 3 do
+			params.FilterDescendantsInstances = ignore
+			local hit = workspace:Raycast(rayOrigin, rayDirection, params)
+			if hit then
+				local hitPart = hit.Instance
+				local nameLower = hitPart.Name:lower()
+				if nameLower:find("tree") or nameLower:find("leaf") or nameLower:find("branch") or nameLower:find("foliage") then
+					table.insert(ignore, hitPart)
+				else
+					groundY = hit.Position.Y
+					break
+				end
 			else
-				groundY = hit.Position.Y
 				break
 			end
-		else
-			break
 		end
-	end
 
-	local y = groundY + hum.HipHeight + (root.Size.Y / 2) + 0.2
-	if hum.RigType == Enum.HumanoidRigType.R6 then
-		y = y + 2
-	end
+		local y = groundY + hum.HipHeight + (root.Size.Y / 2) + 0.2
+		if hum.RigType == Enum.HumanoidRigType.R6 then
+			y = y + 2
+		end
 
-	local standPos = Vector3.new(standXZ.X, y, standXZ.Z)
-	local endCFrame = CFrame.lookAt(standPos, Vector3.new(targetPos.X, y, targetPos.Z))
+		local standPos = Vector3.new(standXZ.X, y, standXZ.Z)
+		endCFrame = CFrame.lookAt(standPos, Vector3.new(targetPos.X, y, targetPos.Z))
+	end
 
 	local distance = (root.Position - endCFrame.Position).Magnitude
 	local duration = math.clamp(distance / TWEEN_SPEED, 0.02, 0.6)
@@ -225,13 +251,18 @@ local function moveToTarget(mode, entry)
 	root.AssemblyLinearVelocity = Vector3.zero
 end
 
--- Continuously lock rotation to look directly at the target
+-- Continuously lock rotation to face the target on every attack
 local function lookAtTarget(targetPos)
 	local root = getRoot()
 	if not root or not targetPos then return end
-	local currentPos = root.Position
-	if (currentPos - targetPos).Magnitude > 0.1 then
-		root.CFrame = CFrame.lookAt(currentPos, Vector3.new(targetPos.X, currentPos.Y, targetPos.Z))
+	if shownTab == "Mobs" then
+		local hoverPos = targetPos + Vector3.new(0, MOB_HEIGHT_OFFSET, 0)
+		root.CFrame = CFrame.lookAt(hoverPos, targetPos)
+	else
+		local currentPos = root.Position
+		if (currentPos - targetPos).Magnitude > 0.1 then
+			root.CFrame = CFrame.lookAt(currentPos, Vector3.new(targetPos.X, currentPos.Y, targetPos.Z))
+		end
 	end
 end
 
@@ -241,7 +272,7 @@ local function needsReposition(mode, entry)
 	if not (root and pos) then return false end
 	local d = root.Position - pos
 	local xzDist = Vector3.new(d.X, 0, d.Z).Magnitude
-	return xzDist > REPOSITION_DIST or xzDist < CLOSE_PROXIMITY
+	return xzDist > REPOSITION_DIST
 end
 
 local function pickTarget(mode)
@@ -288,10 +319,9 @@ local function farmLoop(id, modeName)
 		return enabled and id == runId
 	end
 
-	-- Set PlatformStand to true while farming Mobs
-	local hum = getHumanoid()
-	if hum and modeName == "Mobs" then
-		hum.PlatformStand = true
+	-- Turn Fly ON when starting Mob farming
+	if modeName == "Mobs" then
+		setFlyEnabled(true)
 	end
 
 	while alive() do
@@ -342,10 +372,9 @@ local function farmLoop(id, modeName)
 		end
 	end
 
-	-- Reset PlatformStand when loop exits
-	local currentHum = getHumanoid()
-	if currentHum then
-		currentHum.PlatformStand = false
+	-- Turn Fly OFF when mob farming stops
+	if modeName == "Mobs" then
+		setFlyEnabled(false)
 	end
 
 	if id == runId then
@@ -366,11 +395,8 @@ local function setEnabled(modeName, state)
 		activeTween = nil
 	end
 
-	-- Make sure PlatformStand is reset if toggled off
-	local hum = getHumanoid()
-	if hum then
-		hum.PlatformStand = false
-	end
+	-- Ensure fly is turned off when disabled
+	setFlyEnabled(false)
 
 	for name, p in pairs(pages) do
 		if name ~= "Drop" then
