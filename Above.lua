@@ -17,8 +17,8 @@ local ResourceField = Hub:WaitForChild("ResourceField")
 -- Settings
 ----------------------------------------------------------------
 local STAND_DISTANCE = 4          -- how far from the target you stand (for resources)
-local MOB_HEIGHT_OFFSET = 6       -- how high above the mob you hover
-local MOB_SIDE_OFFSET = 4         -- how far to the side of the mob you hover
+local MOB_HEIGHT_OFFSET = 4       -- how high above the mob you hover
+local MOB_SIDE_OFFSET = 2         -- how far to the side of the mob you hover
 local REPOSITION_DIST = 8         -- re-tween if the mob gets farther than this
 local CLOSE_PROXIMITY = 2.5       -- re-tween if the mob gets too close
 local TWEEN_SPEED = 20            -- studs per second for smooth sliding movement
