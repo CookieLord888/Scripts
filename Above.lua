@@ -7,7 +7,7 @@ local player = Players.LocalPlayer
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local SwingEvent = Remotes:WaitForChild("RequestSwing")
 local EquipEvent = ReplicatedStorage:WaitForChild("RequestEquipSlot")
-local DropEvent = ReplicatedStorage:WaitForChild("RequestDrop")
+local DropEvent = Remotes:WaitForChild("RequestDrop")
 
 local Hub = workspace:WaitForChild("Hub")
 local Guardians = Hub:WaitForChild("Guardians")
@@ -19,7 +19,7 @@ local ResourceField = Hub:WaitForChild("ResourceField")
 local Config = {
 	Timestamps = {
 		LastHit = 0,
-		HitCooldown = 0.5, -- mob swing delay
+		HitCooldown = 0.1, -- mob swing delay
 	}
 }
 
@@ -157,7 +157,7 @@ local function equip(slot)
 end
 
 ----------------------------------------------------------------
--- AutoFarm Logic for Mobs (Closer & Lower to Slime)
+-- AutoFarm Logic for Mobs (Smooth Side-to-Side Sway in Air)
 ----------------------------------------------------------------
 local function runMobAutoFarm()
 	local mobs = Guardians
@@ -190,8 +190,19 @@ local function runMobAutoFarm()
 		hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
 
 		local direction = (closestPos - hrp.Position).Unit
-		-- Adjusted closer (-2.5 studs back) and lower (+2.5 studs high) to stay close to the slime
-		local newPosition = closestPos - direction * 2.5 + Vector3.new(0, 2.5, 0)
+		
+		-- Create a perpendicular right vector for side-to-side swaying
+		local rightVector = direction:Cross(Vector3.new(0, 1, 0))
+		if rightVector.Magnitude == 0 then
+			rightVector = Vector3.new(1, 0, 0)
+		else
+			rightVector = rightVector.Unit
+		end
+
+		-- Sine wave oscillation for smooth side-to-side sway motion over time
+		local swayAmount = math.sin(tick() * 5) * 2.5
+		local newPosition = closestPos - (direction * 2.5) + (rightVector * swayAmount) + Vector3.new(0, 2.5, 0)
+		
 		hrp.CFrame = CFrame.new(newPosition, closestPos)
 
 		if (tick() - Config.Timestamps.LastHit >= Config.Timestamps.HitCooldown) then
