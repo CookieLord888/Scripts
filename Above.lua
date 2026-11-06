@@ -16,13 +16,13 @@ local ResourceField = Hub:WaitForChild("ResourceField")
 ----------------------------------------------------------------
 -- Settings
 ----------------------------------------------------------------
-local STAND_DISTANCE = 4          -- how far from the target you stand (for resources)
-local MOB_HEIGHT_OFFSET = 3       -- slightly above the mob
-local MOB_SIDE_OFFSET = 2.5       -- close to the side of the mob
-local REPOSITION_DIST = 8         -- re-tween if the mob gets farther than this
-local CLOSE_PROXIMITY = 1.5       -- re-tween if the mob gets too close
+local STAND_DISTANCE = 4          -- how far from the target you stand
+local SIDE_OFFSET = 2             -- shifts you slightly to the side so the target is in front of you
+local REPOSITION_DIST = 8         -- re-tween if the target gets farther than this
+local CLOSE_PROXIMITY = 1.5       -- re-tween if the target gets too close
 local TWEEN_SPEED = 22            -- studs per second for smooth sliding movement
-local SWING_DELAY = 0
+local SWING_DELAY_MOBS = 0.1      -- delay between swings for mobs
+local SWING_DELAY_RES = 0         -- delay between swings for resources
 local TOGGLE_KEY = Enum.KeyCode.K
 local SKIP_KEY = Enum.KeyCode.J
 local MIN_Y_POSITION = 200        -- ignore any targets below this Y coordinate
@@ -115,7 +115,6 @@ local MODES = {
 		isCandidate = function(m) return m:IsA("Model") or m:IsA("BasePart") end,
 		isValid = mobAlive,
 		swingTarget = function(m) 
-			-- Ensure we return an actual BasePart for the server event
 			if m:IsA("Model") then
 				return m.PrimaryPart or m:FindFirstChild("HumanoidRootPart") or m:FindFirstChildWhichIsA("BasePart")
 			end
@@ -155,7 +154,7 @@ local function equip(slot)
 	task.wait(0.3)
 end
 
--- Smoothly tween to position (Hovering above/side for mobs, ground snapping for resources)
+-- Smoothly tween/slide on the floor near the target
 local function moveToTarget(mode, entry)
 	local char = player.Character
 	local root = getRoot()
@@ -168,85 +167,72 @@ local function moveToTarget(mode, entry)
 		activeTween = nil
 	end
 
-	local endCFrame
-
-	if shownTab == "Mobs" then
-		-- Hover closer above and slightly to the side of the mob, looking down at it
-		local hoverPos = targetPos + Vector3.new(MOB_SIDE_OFFSET, MOB_HEIGHT_OFFSET, MOB_SIDE_OFFSET)
-		endCFrame = CFrame.lookAt(hoverPos, targetPos)
+	local away = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
+	if away.Magnitude < 0.1 then
+		away = Vector3.new(1, 0, 0)
 	else
-		-- Ground positioning for resources
-		local away = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
-		if away.Magnitude < 0.1 then
-			away = Vector3.new(1, 0, 0)
-		else
-			away = away.Unit
-		end
+		away = away.Unit
+	end
 
-		local sideVec = Vector3.new(-away.Z, 0, away.X)
-		local standXZ = targetPos + (away * STAND_DISTANCE) + (sideVec * 2)
+	local sideVec = Vector3.new(-away.Z, 0, away.X)
+	local standXZ = targetPos + (away * STAND_DISTANCE) + (sideVec * SIDE_OFFSET)
 
-		local ignore = { char, entry }
-		local params = RaycastParams.new()
-		params.FilterType = Enum.RaycastFilterType.Exclude
-		params.IgnoreWater = true
+	local ignore = { char, entry }
+	if mode.excludeFolder then
+		table.insert(ignore, mode.folder)
+	end
 
-		local groundY = targetPos.Y
-		local rayOrigin = Vector3.new(standXZ.X, targetPos.Y + 6, standXZ.Z)
-		local rayDirection = Vector3.new(0, -25, 0)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.IgnoreWater = true
 
-		for i = 1, 3 do
-			params.FilterDescendantsInstances = ignore
-			local hit = workspace:Raycast(rayOrigin, rayDirection, params)
-			if hit then
-				local hitPart = hit.Instance
-				local nameLower = hitPart.Name:lower()
-				if nameLower:find("tree") or nameLower:find("leaf") or nameLower:find("branch") or nameLower:find("foliage") then
-					table.insert(ignore, hitPart)
-				else
-					groundY = hit.Position.Y
-					break
-				end
+	local groundY = targetPos.Y
+	local rayOrigin = Vector3.new(standXZ.X, targetPos.Y + 6, standXZ.Z)
+	local rayDirection = Vector3.new(0, -25, 0)
+
+	for i = 1, 3 do
+		params.FilterDescendantsInstances = ignore
+		local hit = workspace:Raycast(rayOrigin, rayDirection, params)
+		if hit then
+			local hitPart = hit.Instance
+			local nameLower = hitPart.Name:lower()
+			if nameLower:find("tree") or nameLower:find("leaf") or nameLower:find("branch") or nameLower:find("foliage") then
+				table.insert(ignore, hitPart)
 			else
+				groundY = hit.Position.Y
 				break
 			end
+		else
+			break
 		end
-
-		local y = groundY + hum.HipHeight + (root.Size.Y / 2) + 0.2
-		if hum.RigType == Enum.HumanoidRigType.R6 then
-			y = y + 2
-		end
-
-		local standPos = Vector3.new(standXZ.X, y, standXZ.Z)
-		endCFrame = CFrame.lookAt(standPos, Vector3.new(targetPos.X, y, targetPos.Z))
 	end
 
-	if shownTab == "Mobs" then
-		local distance = (root.Position - endCFrame.Position).Magnitude
-		local duration = math.clamp(distance / TWEEN_SPEED, 0.02, 0.5)
-		
-		activeTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = endCFrame})
-		activeTween:Play()
-		task.wait(duration)
-	else
-		root.CFrame = endCFrame
+	local y = groundY + hum.HipHeight + (root.Size.Y / 2) + 0.2
+	if hum.RigType == Enum.HumanoidRigType.R6 then
+		y = y + 2
 	end
+
+	local standPos = Vector3.new(standXZ.X, y, standXZ.Z)
+	local endCFrame = CFrame.lookAt(standPos, Vector3.new(targetPos.X, y, targetPos.Z))
+
+	-- Smooth tween slide for both Mobs and Resources on the floor
+	local distance = (root.Position - endCFrame.Position).Magnitude
+	local duration = math.clamp(distance / TWEEN_SPEED, 0.02, 0.6)
+	
+	activeTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = endCFrame})
+	activeTween:Play()
+	task.wait(duration)
 	
 	root.AssemblyLinearVelocity = Vector3.zero
 end
 
--- Continuously lock rotation to look directly at the target mob from above
+-- Continuously lock rotation to look directly at the target
 local function lookAtTarget(targetPos)
 	local root = getRoot()
 	if not root or not targetPos then return end
-	if shownTab == "Mobs" then
-		local hoverPos = targetPos + Vector3.new(MOB_SIDE_OFFSET, MOB_HEIGHT_OFFSET, MOB_SIDE_OFFSET)
-		root.CFrame = CFrame.lookAt(hoverPos, targetPos)
-	else
-		local currentPos = root.Position
-		if (currentPos - targetPos).Magnitude > 0.1 then
-			root.CFrame = CFrame.lookAt(currentPos, Vector3.new(targetPos.X, currentPos.Y, targetPos.Z))
-		end
+	local currentPos = root.Position
+	if (currentPos - targetPos).Magnitude > 0.1 then
+		root.CFrame = CFrame.lookAt(currentPos, Vector3.new(targetPos.X, currentPos.Y, targetPos.Z))
 	end
 end
 
@@ -336,7 +322,10 @@ local function farmLoop(id, modeName)
 				end
 
 				SwingEvent:FireServer(swingTarget)
-				task.wait(SWING_DELAY)
+				
+				-- Apply specific swing delays per mode
+				local currentDelay = (shownTab == "Mobs") and SWING_DELAY_MOBS or SWING_DELAY_RES
+				task.wait(currentDelay)
 			end
 
 			if skipRequested then
@@ -517,7 +506,6 @@ local function makePage(index, modeName)
 
 		startY = 30
 	elseif modeName == "Drop" then
-		-- Item Name Input Box
 		local itemBox = Instance.new("TextBox")
 		itemBox.Size = UDim2.new(1, -20, 0, 26)
 		itemBox.Position = UDim2.fromOffset(10, 0)
@@ -537,7 +525,6 @@ local function makePage(index, modeName)
 			end
 		end)
 
-		-- Speed Input Box
 		local speedBox = Instance.new("TextBox")
 		speedBox.Size = UDim2.new(1, -20, 0, 26)
 		speedBox.Position = UDim2.fromOffset(10, 32)
