@@ -18,6 +18,7 @@ local ResourceField = Hub:WaitForChild("ResourceField")
 local STAND_DISTANCE = 4          -- how far from the target you stand (studs)
 local SIDE_OFFSET = 2             -- shifts you slightly to the side so the target is in front of you
 local REPOSITION_DIST = 8         -- re-teleport if the target gets farther than this (moving mobs)
+local CLOSE_PROXIMITY = 2.5       -- re-teleport if a mob gets closer than this to you (stops crowding)
 local SWING_DELAY = 0
 local TOGGLE_KEY = Enum.KeyCode.K
 local SKIP_KEY = Enum.KeyCode.J
@@ -144,7 +145,7 @@ local function equip(slot)
 	task.wait(0.3)
 end
 
--- Smarter ground snapping that avoids tree branches and cave roofs
+-- Ground snapping that avoids tree branches and cave roofs
 local function placeNear(mode, entry)
 	local char = player.Character
 	local root = getRoot()
@@ -162,7 +163,6 @@ local function placeNear(mode, entry)
 	local sideVec = Vector3.new(-away.Z, 0, away.X)
 	local standXZ = targetPos + (away * STAND_DISTANCE) + (sideVec * SIDE_OFFSET)
 
-	-- Collect instances to ignore during raycasting (character, target, and any tree branches directly overhead)
 	local ignore = { char, entry }
 	if mode.excludeFolder then
 		table.insert(ignore, mode.folder)
@@ -173,17 +173,15 @@ local function placeNear(mode, entry)
 	params.IgnoreWater = true
 
 	local groundY = targetPos.Y
-	local rayOrigin = Vector3.new(standXZ.X, targetPos.Y + 6, standXZ.Z) -- Start low (6 studs above target base) to stay under tree canopies/roofs
+	local rayOrigin = Vector3.new(standXZ.X, targetPos.Y + 6, standXZ.Z)
 	local rayDirection = Vector3.new(0, -25, 0)
 
-	-- Loop raycasting to skip tree leaves/branches if they accidentally block the ray
 	for i = 1, 3 do
 		params.FilterDescendantsInstances = ignore
 		local hit = workspace:Raycast(rayOrigin, rayDirection, params)
 		if hit then
 			local hitPart = hit.Instance
 			local nameLower = hitPart.Name:lower()
-			-- If it hits a tree or leaves, ignore it and raycast through it
 			if nameLower:find("tree") or nameLower:find("leaf") or nameLower:find("branch") or nameLower:find("foliage") then
 				table.insert(ignore, hitPart)
 			else
@@ -215,12 +213,16 @@ local function lookAtTarget(targetPos)
 	end
 end
 
+-- Checks if target moved too far OR got too close (crowding prevention)
 local function needsReposition(mode, entry)
 	local root = getRoot()
 	local pos = mode.position(entry)
 	if not (root and pos) then return false end
 	local d = root.Position - pos
-	return Vector3.new(d.X, 0, d.Z).Magnitude > REPOSITION_DIST
+	local xzDist = Vector3.new(d.X, 0, d.Z).Magnitude
+	
+	-- Reposition if they walked too far away OR jumped too close into you (< CLOSE_PROXIMITY)
+	return xzDist > REPOSITION_DIST or xzDist < CLOSE_PROXIMITY
 end
 
 local function pickTarget(mode)
@@ -289,6 +291,8 @@ local function farmLoop(id, modeName)
 				end
 				local swingTarget = mode.swingTarget(entry)
 				if not swingTarget then break end
+				
+				-- If the mob jumps too close to you or runs away, instantly snap back into position
 				if needsReposition(mode, entry) then
 					placeNear(mode, entry)
 				end
