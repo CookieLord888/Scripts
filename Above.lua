@@ -19,7 +19,7 @@ local ResourceField = Hub:WaitForChild("ResourceField")
 local Config = {
 	Timestamps = {
 		LastHit = 0,
-		HitCooldown = 0.1, -- mob swing delay
+		HitCooldown = 0.5, -- mob swing delay
 	}
 }
 
