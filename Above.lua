@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local VirtualUser = game:GetService("VirtualUser")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -70,6 +71,19 @@ local filterButtons = {}
 local dropEnabled = false
 local dropItemName = "IronOre"
 local dropSpeed = 0.1
+
+----------------------------------------------------------------
+-- Anti-AFK Background Handler
+----------------------------------------------------------------
+local function setupAntiAfk()
+	player.Idled:Connect(function()
+		pcall(function()
+			VirtualUser:CaptureController()
+			VirtualUser:ClickButton2(Vector2.new())
+		end)
+	end)
+end
+task.spawn(setupAntiAfk)
 
 ----------------------------------------------------------------
 -- Helpers
