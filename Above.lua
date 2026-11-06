@@ -17,11 +17,11 @@ local ResourceField = Hub:WaitForChild("ResourceField")
 -- Settings
 ----------------------------------------------------------------
 local STAND_DISTANCE = 4          -- how far from the target you stand (for resources)
-local MOB_HEIGHT_OFFSET = 4       -- how high above the mob you hover
-local MOB_SIDE_OFFSET = 2         -- how far to the side of the mob you hover
+local MOB_HEIGHT_OFFSET = 3       -- slightly above the mob
+local MOB_SIDE_OFFSET = 2.5       -- close to the side of the mob
 local REPOSITION_DIST = 8         -- re-tween if the mob gets farther than this
-local CLOSE_PROXIMITY = 2.5       -- re-tween if the mob gets too close
-local TWEEN_SPEED = 20            -- studs per second for smooth sliding movement
+local CLOSE_PROXIMITY = 1.5       -- re-tween if the mob gets too close
+local TWEEN_SPEED = 22            -- studs per second for smooth sliding movement
 local SWING_DELAY = 0
 local TOGGLE_KEY = Enum.KeyCode.K
 local SKIP_KEY = Enum.KeyCode.J
@@ -114,7 +114,13 @@ local MODES = {
 		excludeFolder = true,
 		isCandidate = function(m) return m:IsA("Model") or m:IsA("BasePart") end,
 		isValid = mobAlive,
-		swingTarget = function(m) return m end,
+		swingTarget = function(m) 
+			-- Ensure we return an actual BasePart for the server event
+			if m:IsA("Model") then
+				return m.PrimaryPart or m:FindFirstChild("HumanoidRootPart") or m:FindFirstChildWhichIsA("BasePart")
+			end
+			return m
+		end,
 		position = function(m) return m:GetPivot().Position end,
 		tool = function() return MOB_SLOT end,
 	},
@@ -165,7 +171,7 @@ local function moveToTarget(mode, entry)
 	local endCFrame
 
 	if shownTab == "Mobs" then
-		-- Hover above and slightly to the side of the mob, looking down at it
+		-- Hover closer above and slightly to the side of the mob, looking down at it
 		local hoverPos = targetPos + Vector3.new(MOB_SIDE_OFFSET, MOB_HEIGHT_OFFSET, MOB_SIDE_OFFSET)
 		endCFrame = CFrame.lookAt(hoverPos, targetPos)
 	else
@@ -217,7 +223,7 @@ local function moveToTarget(mode, entry)
 
 	if shownTab == "Mobs" then
 		local distance = (root.Position - endCFrame.Position).Magnitude
-		local duration = math.clamp(distance / TWEEN_SPEED, 0.05, 0.8)
+		local duration = math.clamp(distance / TWEEN_SPEED, 0.02, 0.5)
 		
 		activeTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = endCFrame})
 		activeTween:Play()
