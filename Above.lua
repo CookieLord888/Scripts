@@ -6,8 +6,8 @@ local RunService = game:GetService("RunService")
 local player = Players.LocalPlayer
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local SwingEvent = Remotes:WaitForChild("RequestSwing")
-local EquipEvent = Remotes:WaitForChild("RequestEquipSlot")
-local DropEvent = Remotes:WaitForChild("RequestDrop")
+local EquipEvent = ReplicatedStorage:WaitForChild("RequestEquipSlot")
+local DropEvent = ReplicatedStorage:WaitForChild("RequestDrop")
 
 local Hub = workspace:WaitForChild("Hub")
 local Guardians = Hub:WaitForChild("Guardians")
@@ -19,7 +19,7 @@ local ResourceField = Hub:WaitForChild("ResourceField")
 local Config = {
 	Timestamps = {
 		LastHit = 0,
-		HitCooldown = 0.1, -- your preferred mob swing delay
+		HitCooldown = 0.1, -- mob swing delay
 	}
 }
 
@@ -157,7 +157,7 @@ local function equip(slot)
 end
 
 ----------------------------------------------------------------
--- AutoFarm Logic for Mobs (Using your exact calculation style)
+-- AutoFarm Logic for Mobs (Closer & Lower to Slime)
 ----------------------------------------------------------------
 local function runMobAutoFarm()
 	local mobs = Guardians
@@ -190,7 +190,8 @@ local function runMobAutoFarm()
 		hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
 
 		local direction = (closestPos - hrp.Position).Unit
-		local newPosition = closestPos - direction * 4 + Vector3.new(0, 5, 0)
+		-- Adjusted closer (-2.5 studs back) and lower (+2.5 studs high) to stay close to the slime
+		local newPosition = closestPos - direction * 2.5 + Vector3.new(0, 2.5, 0)
 		hrp.CFrame = CFrame.new(newPosition, closestPos)
 
 		if (tick() - Config.Timestamps.LastHit >= Config.Timestamps.HitCooldown) then
