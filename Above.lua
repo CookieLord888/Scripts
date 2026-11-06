@@ -150,22 +150,21 @@ local MODES = {
 	},
 }
 
--- Calculates a clean CFrame directly above the slime without gimbal-lock jitter
+-- Forces a strictly downward-looking CFrame directly above the target
 local function getMobHoverCFrame(targetPos)
-	-- Tiny 0.25 stud horizontal offset prevents CFrame.lookAt from flipping when looking straight down
-	local hoverPos = targetPos + Vector3.new(0, MOB_HEIGHT_OFFSET, 0.25)
-	return CFrame.lookAt(hoverPos, targetPos)
+	local hoverPos = targetPos + Vector3.new(0, MOB_HEIGHT_OFFSET, 0)
+	-- Construct CFrame pointing straight down at the target with a fixed top vector
+	return CFrame.lookAt(hoverPos, targetPos, Vector3.new(0, 0, -1))
 end
 
 ----------------------------------------------------------------
--- Fly & Anti-Jitter Lock
+-- Fly & Permanent Downward Lock
 ----------------------------------------------------------------
 local function setFlyEnabled(state)
 	local char = player.Character
 	local root = getRoot()
 	local hum = getHumanoid()
 
-	-- Fire game remote if one exists
 	local flyRemote = Remotes:FindFirstChild("RequestFly") or Remotes:FindFirstChild("Fly") or Remotes:FindFirstChild("ToggleFly")
 	if flyRemote then
 		pcall(function()
@@ -176,7 +175,6 @@ local function setFlyEnabled(state)
 		char:SetAttribute("Flying", state)
 	end
 
-	-- Clean up any existing fly force or heartbeat lock
 	if hoverConn then
 		hoverConn:Disconnect()
 		hoverConn = nil
@@ -187,7 +185,6 @@ local function setFlyEnabled(state)
 	end
 
 	if state and root then
-		-- Zero-velocity BodyVelocity cancels gravity completely so you never fall/jitter
 		local bv = Instance.new("BodyVelocity")
 		bv.Name = "MobHoverFly"
 		bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
@@ -199,7 +196,7 @@ local function setFlyEnabled(state)
 			hum.PlatformStand = true
 		end
 
-		-- Smoothly lock position & rotation every frame while hovering above the active mob
+		-- Lock position and downward gaze every single frame so it never flips upright
 		hoverConn = RunService.Heartbeat:Connect(function()
 			if not enabled or shownTab ~= "Mobs" then return end
 			local r = getRoot()
@@ -207,7 +204,6 @@ local function setFlyEnabled(state)
 			r.AssemblyLinearVelocity = Vector3.zero
 			r.AssemblyAngularVelocity = Vector3.zero
 
-			-- Only lock once the initial tween to the target has finished
 			if not activeTween and currentTarget and mobAlive(currentTarget) then
 				local targetPos = MODES.Mobs.position(currentTarget)
 				if targetPos then
@@ -251,7 +247,6 @@ local function moveToTarget(mode, entry)
 	if shownTab == "Mobs" then
 		endCFrame = getMobHoverCFrame(targetPos)
 	else
-		-- Ground positioning for resources
 		local away = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
 		if away.Magnitude < 0.1 then
 			away = Vector3.new(1, 0, 0)
@@ -388,7 +383,7 @@ local function farmLoop(id, modeName)
 			status.Text = "Waiting for targets..."
 			task.wait(0.5)
 		else
-			currentTarget = nil -- keep nil during initial tween so Heartbeat doesn't fight the tween
+			currentTarget = nil
 			status.Text = "Target: " .. entry.Name
 
 			equip(mode.tool(entry))
