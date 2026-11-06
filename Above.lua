@@ -16,7 +16,7 @@ local ResourceField = Hub:WaitForChild("ResourceField")
 ----------------------------------------------------------------
 -- Settings
 ----------------------------------------------------------------
-local STAND_DISTANCE = 4          -- how far from the target you stand (studs)
+local STAND_DISTANCE = 5          -- how far from the target you stand (studs)
 local SIDE_OFFSET = 2             -- shifts you slightly to the side so the target is in front of you
 local REPOSITION_DIST = 8         -- re-tween if the target gets farther than this (moving mobs)
 local CLOSE_PROXIMITY = 2.5       -- re-tween if a mob gets closer than this to you (stops crowding)
