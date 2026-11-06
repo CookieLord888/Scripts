@@ -1,7 +1,6 @@
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
@@ -15,23 +14,27 @@ local Guardians = Hub:WaitForChild("Guardians")
 local ResourceField = Hub:WaitForChild("ResourceField")
 
 ----------------------------------------------------------------
--- Settings
+-- Settings & Config
 ----------------------------------------------------------------
-local STAND_DISTANCE = 4          -- how far from the target you stand (resources)
-local SIDE_OFFSET = 2             -- shifts you slightly to the side (resources)
-local MOB_HEIGHT_OFFSET = 8       -- safe height above the slime so you don't die
-local REPOSITION_DIST = 12        -- re-tween if the slime teleports/dashes far away
-local TWEEN_SPEED = 24            -- studs per second for smooth movement
-local SWING_DELAY_MOBS = 0.1      -- delay between swings for mobs
-local SWING_DELAY_RES = 0         -- delay between swings for resources
+local Config = {
+	Timestamps = {
+		LastHit = 0,
+		HitCooldown = 0.1, -- your preferred mob swing delay
+	}
+}
+
+local STAND_DISTANCE = 4          -- resources stand distance
+local SIDE_OFFSET = 2             -- resources side offset
+local REPOSITION_DIST = 8
+local SWING_DELAY_RES = 0
 local TOGGLE_KEY = Enum.KeyCode.K
 local SKIP_KEY = Enum.KeyCode.J
-local MIN_Y_POSITION = 200        -- ignore any targets below this Y coordinate
+local MIN_Y_POSITION = 200
 
-local TREE_KEYWORDS = { "tree" }  -- resources whose name contains one of these get the Axe
-local MOB_SLOT = nil              -- e.g. "Sword": equipped when farming mobs (nil = don't change)
-local MAX_RESOURCE_TIME = 10      -- give up on one resource after this many seconds...
-local RESOURCE_COOLDOWN = 30      -- ...and ignore it for this long
+local TREE_KEYWORDS = { "tree" }
+local MOB_SLOT = nil
+local MAX_RESOURCE_TIME = 10
+local RESOURCE_COOLDOWN = 30
 
 local COLOR_ON = Color3.fromRGB(50, 170, 80)
 local COLOR_OFF = Color3.fromRGB(170, 50, 50)
@@ -45,18 +48,15 @@ local COLOR_SUB_OFF = Color3.fromRGB(65, 65, 75)
 ----------------------------------------------------------------
 local enabled = false
 local shownTab = nil
-local resourceFilter = "Both" -- "Both", "Trees", or "Others"
+local resourceFilter = "Both"
 local runId = 0
 local currentTarget = nil
 local skipRequested = false
-local skipped = {}      -- skipped for later
-local cooldowns = {}    -- resources we gave up on for a while
-local equipped = nil    -- last slot we equipped
+local skipped = {}
+local cooldowns = {}
+local equipped = nil
 local pages, tabs = {}, {}
 local filterButtons = {}
-local activeTween = nil
-local hoverConn = nil
-local flyForce = nil
 
 -- Drop loop state
 local dropEnabled = false
@@ -114,7 +114,6 @@ end
 local MODES = {
 	Mobs = {
 		folder = Guardians,
-		excludeFolder = true,
 		isCandidate = function(m) return m:IsA("Model") or m:IsA("BasePart") end,
 		isValid = mobAlive,
 		swingTarget = function(m) 
@@ -150,78 +149,6 @@ local MODES = {
 	},
 }
 
--- Forces a strictly downward-looking CFrame directly above the target
-local function getMobHoverCFrame(targetPos)
-	local hoverPos = targetPos + Vector3.new(0, MOB_HEIGHT_OFFSET, 0)
-	-- Construct CFrame pointing straight down at the target with a fixed top vector
-	return CFrame.lookAt(hoverPos, targetPos, Vector3.new(0, 0, -1))
-end
-
-----------------------------------------------------------------
--- Fly & Permanent Downward Lock
-----------------------------------------------------------------
-local function setFlyEnabled(state)
-	local char = player.Character
-	local root = getRoot()
-	local hum = getHumanoid()
-
-	local flyRemote = Remotes:FindFirstChild("RequestFly") or Remotes:FindFirstChild("Fly") or Remotes:FindFirstChild("ToggleFly")
-	if flyRemote then
-		pcall(function()
-			flyRemote:FireServer(state)
-		end)
-	end
-	if char then
-		char:SetAttribute("Flying", state)
-	end
-
-	if hoverConn then
-		hoverConn:Disconnect()
-		hoverConn = nil
-	end
-	if flyForce then
-		flyForce:Destroy()
-		flyForce = nil
-	end
-
-	if state and root then
-		local bv = Instance.new("BodyVelocity")
-		bv.Name = "MobHoverFly"
-		bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-		bv.Velocity = Vector3.zero
-		bv.Parent = root
-		flyForce = bv
-
-		if hum then
-			hum.PlatformStand = true
-		end
-
-		-- Lock position and downward gaze every single frame so it never flips upright
-		hoverConn = RunService.Heartbeat:Connect(function()
-			if not enabled or shownTab ~= "Mobs" then return end
-			local r = getRoot()
-			if not r then return end
-			r.AssemblyLinearVelocity = Vector3.zero
-			r.AssemblyAngularVelocity = Vector3.zero
-
-			if not activeTween and currentTarget and mobAlive(currentTarget) then
-				local targetPos = MODES.Mobs.position(currentTarget)
-				if targetPos then
-					r.CFrame = getMobHoverCFrame(targetPos)
-				end
-			end
-		end)
-	else
-		if hum then
-			hum.PlatformStand = false
-		end
-		if root then
-			root.AssemblyLinearVelocity = Vector3.zero
-			root.AssemblyAngularVelocity = Vector3.zero
-		end
-	end
-end
-
 local function equip(slot)
 	if not slot or slot == equipped then return end
 	EquipEvent:FireServer(slot)
@@ -229,108 +156,116 @@ local function equip(slot)
 	task.wait(0.3)
 end
 
--- Movement positioning
-local function moveToTarget(mode, entry)
-	local char = player.Character
-	local root = getRoot()
+----------------------------------------------------------------
+-- AutoFarm Logic for Mobs (Using your exact calculation style)
+----------------------------------------------------------------
+local function runMobAutoFarm()
+	local mobs = Guardians
+	local closestDist = math.huge
+	local closestEntry = nil
+	local closestPos = nil
+
+	local hrp = getRoot()
 	local hum = getHumanoid()
-	local targetPos = mode.position(entry)
-	if not (char and root and hum and targetPos) then return end
+	if not hrp or not hum then return end
 
-	if activeTween then
-		activeTween:Cancel()
-		activeTween = nil
-	end
-
-	local endCFrame
-
-	if shownTab == "Mobs" then
-		endCFrame = getMobHoverCFrame(targetPos)
-	else
-		local away = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
-		if away.Magnitude < 0.1 then
-			away = Vector3.new(1, 0, 0)
-		else
-			away = away.Unit
-		end
-
-		local sideVec = Vector3.new(-away.Z, 0, away.X)
-		local standXZ = targetPos + (away * STAND_DISTANCE) + (sideVec * SIDE_OFFSET)
-
-		local ignore = { char, entry }
-		local params = RaycastParams.new()
-		params.FilterType = Enum.RaycastFilterType.Exclude
-		params.IgnoreWater = true
-
-		local groundY = targetPos.Y
-		local rayOrigin = Vector3.new(standXZ.X, targetPos.Y + 6, standXZ.Z)
-		local rayDirection = Vector3.new(0, -25, 0)
-
-		for i = 1, 3 do
-			params.FilterDescendantsInstances = ignore
-			local hit = workspace:Raycast(rayOrigin, rayDirection, params)
-			if hit then
-				local hitPart = hit.Instance
-				local nameLower = hitPart.Name:lower()
-				if nameLower:find("tree") or nameLower:find("leaf") or nameLower:find("branch") or nameLower:find("foliage") then
-					table.insert(ignore, hitPart)
-				else
-					groundY = hit.Position.Y
-					break
+	for _, v in ipairs(mobs:GetChildren()) do
+		if MODES.Mobs.isCandidate(v) and mobAlive(v) then
+			local pos = MODES.Mobs.position(v)
+			if pos and pos.Y >= MIN_Y_POSITION then
+				local distance = (pos - hrp.Position).Magnitude
+				if distance < closestDist then
+					closestDist = distance
+					closestEntry = v
+					closestPos = pos
 				end
-			else
-				break
 			end
 		end
+	end
 
-		local y = groundY + hum.HipHeight + (root.Size.Y / 2) + 0.2
-		if hum.RigType == Enum.HumanoidRigType.R6 then
-			y = y + 2
+	if closestEntry and closestPos then
+		currentTarget = closestEntry
+		hum.PlatformStand = true
+		hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+		hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+
+		local direction = (closestPos - hrp.Position).Unit
+		local newPosition = closestPos - direction * 4 + Vector3.new(0, 5, 0)
+		hrp.CFrame = CFrame.new(newPosition, closestPos)
+
+		if (tick() - Config.Timestamps.LastHit >= Config.Timestamps.HitCooldown) then
+			Config.Timestamps.LastHit = tick()
+			local swingTarget = MODES.Mobs.swingTarget(closestEntry)
+			if swingTarget then
+				SwingEvent:FireServer(swingTarget)
+			end
 		end
-
-		local standPos = Vector3.new(standXZ.X, y, standXZ.Z)
-		endCFrame = CFrame.lookAt(standPos, Vector3.new(targetPos.X, y, targetPos.Z))
-	end
-
-	local distance = (root.Position - endCFrame.Position).Magnitude
-	local duration = math.clamp(distance / TWEEN_SPEED, 0.02, 0.6)
-	
-	local tween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = endCFrame})
-	activeTween = tween
-	tween:Play()
-	task.wait(duration)
-	if activeTween == tween then
-		activeTween = nil
-	end
-	
-	root.AssemblyLinearVelocity = Vector3.zero
-end
-
-local function lookAtTarget(targetPos)
-	local root = getRoot()
-	if not root or not targetPos then return end
-	if shownTab == "Mobs" then
-		root.CFrame = getMobHoverCFrame(targetPos)
 	else
-		local currentPos = root.Position
-		if (currentPos - targetPos).Magnitude > 0.1 then
-			root.CFrame = CFrame.lookAt(currentPos, Vector3.new(targetPos.X, currentPos.Y, targetPos.Z))
-		end
+		currentTarget = nil
+		hum.PlatformStand = false
 	end
 end
 
-local function needsReposition(mode, entry)
-	local root = getRoot()
-	local pos = mode.position(entry)
-	if not (root and pos) then return false end
-	local d = root.Position - pos
-	local xzDist = Vector3.new(d.X, 0, d.Z).Magnitude
-	return xzDist > REPOSITION_DIST
+----------------------------------------------------------------
+-- Resource Farm Loop (Ground snapping)
+----------------------------------------------------------------
+local function placeNearResource(mode, entry)
+	local char = player.Character
+	local hrp = getRoot()
+	local hum = getHumanoid()
+	local targetPos = mode.position(entry)
+	if not (char and hrp and hum and targetPos) then return end
+
+	local away = Vector3.new(hrp.Position.X - targetPos.X, 0, hrp.Position.Z - targetPos.Z)
+	if away.Magnitude < 0.1 then
+		away = Vector3.new(1, 0, 0)
+	else
+		away = away.Unit
+	end
+
+	local sideVec = Vector3.new(-away.Z, 0, away.X)
+	local standXZ = targetPos + (away * STAND_DISTANCE) + (sideVec * SIDE_OFFSET)
+
+	local ignore = { char, entry }
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.IgnoreWater = true
+
+	local groundY = targetPos.Y
+	local rayOrigin = Vector3.new(standXZ.X, targetPos.Y + 6, standXZ.Z)
+	local rayDirection = Vector3.new(0, -25, 0)
+
+	for i = 1, 3 do
+		params.FilterDescendantsInstances = ignore
+		local hit = workspace:Raycast(rayOrigin, rayDirection, params)
+		if hit then
+			local hitPart = hit.Instance
+			local nameLower = hitPart.Name:lower()
+			if nameLower:find("tree") or nameLower:find("leaf") or nameLower:find("branch") or nameLower:find("foliage") then
+				table.insert(ignore, hitPart)
+			else
+				groundY = hit.Position.Y
+				break
+			end
+		else
+			break
+		end
+	end
+
+	local y = groundY + hum.HipHeight + (hrp.Size.Y / 2) + 0.2
+	if hum.RigType == Enum.HumanoidRigType.R6 then
+		y = y + 2
+	end
+
+	local standPos = Vector3.new(standXZ.X, y, standXZ.Z)
+	hrp.CFrame = CFrame.lookAt(standPos, Vector3.new(targetPos.X, y, targetPos.Z))
+	hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+	hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
 end
 
-local function pickTarget(mode)
-	local root = getRoot()
-	if not root then return nil end
+local function pickResourceTarget(mode)
+	local hrp = getRoot()
+	if not hrp then return nil end
 	local now = os.clock()
 
 	local function search(ignoreSkipped)
@@ -343,7 +278,7 @@ local function pickTarget(mode)
 						skipped[entry] = nil
 					elseif not (cooldowns[entry] and cooldowns[entry] > now)
 						and not (ignoreSkipped and skipped[entry]) then
-						local dist = (pos - root.Position).Magnitude
+						local dist = (pos - hrp.Position).Magnitude
 						if dist < bestDist then
 							best, bestDist = entry, dist
 						end
@@ -362,34 +297,26 @@ local function pickTarget(mode)
 	return entry
 end
 
-----------------------------------------------------------------
--- Loops & Toggles
-----------------------------------------------------------------
-local function farmLoop(id, modeName)
-	local mode = MODES[modeName]
-	local status = pages[modeName].status
+local function resourceFarmLoop(id)
+	local mode = MODES["Resources"]
+	local status = pages["Resources"].status
 	local function alive()
-		return enabled and id == runId
-	end
-
-	if modeName == "Mobs" then
-		setFlyEnabled(true)
+		return enabled and shownTab == "Resources" and id == runId
 	end
 
 	while alive() do
-		local entry = pickTarget(mode)
+		local entry = pickResourceTarget(mode)
 		if not entry then
 			currentTarget = nil
 			status.Text = "Waiting for targets..."
 			task.wait(0.5)
 		else
-			currentTarget = nil
+			currentTarget = entry
 			status.Text = "Target: " .. entry.Name
 
 			equip(mode.tool(entry))
 			if not alive() then break end
-			moveToTarget(mode, entry)
-			currentTarget = entry
+			placeNearResource(mode, entry)
 
 			local started = os.clock()
 			while alive() and mode.isValid(entry) and not skipRequested and getRoot() do
@@ -399,25 +326,15 @@ local function farmLoop(id, modeName)
 				end
 				local swingTarget = mode.swingTarget(entry)
 				if not swingTarget then break end
-				
-				if needsReposition(mode, entry) then
-					currentTarget = nil
-					moveToTarget(mode, entry)
-					currentTarget = entry
-				end
-				
-				local targetPos = mode.position(entry)
-				if targetPos then
-					lookAtTarget(targetPos)
+
+				local pos = mode.position(entry)
+				if pos and (getRoot().Position - pos).Magnitude > REPOSITION_DIST then
+					placeNearResource(mode, entry)
 				end
 
 				SwingEvent:FireServer(swingTarget)
-				
-				local currentDelay = (shownTab == "Mobs") and SWING_DELAY_MOBS or SWING_DELAY_RES
-				task.wait(currentDelay)
+				task.wait(SWING_DELAY_RES)
 			end
-
-			currentTarget = nil
 
 			if skipRequested then
 				skipRequested = false
@@ -429,14 +346,19 @@ local function farmLoop(id, modeName)
 		end
 	end
 
-	if modeName == "Mobs" then
-		setFlyEnabled(false)
-	end
-
 	if id == runId then
 		currentTarget = nil
 	end
 end
+
+----------------------------------------------------------------
+-- Toggles & Tab Management
+----------------------------------------------------------------
+RunService.Heartbeat:Connect(function()
+	if enabled and shownTab == "Mobs" then
+		runMobAutoFarm()
+	end
+end)
 
 local function setEnabled(modeName, state)
 	enabled = state
@@ -446,12 +368,11 @@ local function setEnabled(modeName, state)
 	cooldowns = {}
 	equipped = nil
 	currentTarget = nil
-	if activeTween then
-		activeTween:Cancel()
-		activeTween = nil
-	end
 
-	setFlyEnabled(false)
+	local hum = getHumanoid()
+	if hum and not enabled then
+		hum.PlatformStand = false
+	end
 
 	for name, p in pairs(pages) do
 		if name ~= "Drop" then
@@ -464,8 +385,8 @@ local function setEnabled(modeName, state)
 		end
 	end
 
-	if enabled and modeName ~= "Drop" then
-		task.spawn(farmLoop, runId, modeName)
+	if enabled and modeName == "Resources" then
+		task.spawn(resourceFarmLoop, runId)
 	end
 end
 
@@ -509,7 +430,7 @@ end
 local function showTab(name)
 	if name == shownTab then return end
 	
-	if enabled and shownTab ~= "Drop" then
+	if enabled then
 		setEnabled(shownTab, false)
 	end
 
@@ -725,10 +646,6 @@ end)
 
 player.CharacterAdded:Connect(function()
 	equipped = nil
-	if enabled and shownTab == "Mobs" then
-		task.wait(0.2)
-		setFlyEnabled(true)
-	end
 end)
 
 showTab("Mobs")
