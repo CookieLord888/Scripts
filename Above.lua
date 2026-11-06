@@ -16,6 +16,7 @@ local ResourceField = Hub:WaitForChild("ResourceField")
 -- Settings
 ----------------------------------------------------------------
 local STAND_DISTANCE = 4          -- how far from the target you stand (studs)
+local SIDE_OFFSET = 2             -- shifts you slightly to the side so the target is in front of you
 local REPOSITION_DIST = 8         -- re-teleport if the target gets farther than this (moving mobs)
 local SWING_DELAY = 0
 local TOGGLE_KEY = Enum.KeyCode.K
@@ -143,6 +144,7 @@ local function equip(slot)
 	task.wait(0.3)
 end
 
+-- Stands a little to the side so the target stays right in front of you
 local function placeNear(mode, entry)
 	local char = player.Character
 	local root = getRoot()
@@ -153,8 +155,13 @@ local function placeNear(mode, entry)
 	local away = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
 	if away.Magnitude < 0.1 then
 		away = Vector3.new(1, 0, 0)
+	else
+		away = away.Unit
 	end
-	local standXZ = targetPos + away.Unit * STAND_DISTANCE
+
+	-- Compute a perpendicular vector to create a slight side-step offset
+	local sideVec = Vector3.new(-away.Z, 0, away.X)
+	local standXZ = targetPos + (away * STAND_DISTANCE) + (sideVec * SIDE_OFFSET)
 
 	local ignore = { char, entry }
 	if mode.excludeFolder then
@@ -270,7 +277,6 @@ local function farmLoop(id, modeName)
 					placeNear(mode, entry)
 				end
 				
-				-- Ensure character is looking right at the target before swinging
 				local targetPos = mode.position(entry)
 				if targetPos then
 					lookAtTarget(targetPos)
