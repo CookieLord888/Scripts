@@ -16,11 +16,12 @@ local ResourceField = Hub:WaitForChild("ResourceField")
 ----------------------------------------------------------------
 -- Settings
 ----------------------------------------------------------------
-local STAND_DISTANCE = 5          -- how far from the target you stand (studs)
-local SIDE_OFFSET = 2             -- shifts you slightly to the side so the target is in front of you
-local REPOSITION_DIST = 8         -- re-tween if the target gets farther than this (moving mobs)
-local CLOSE_PROXIMITY = 2.5       -- re-tween if a mob gets closer than this to you (stops crowding)
-local TWEEN_SPEED = 16            -- studs per second for smooth sliding movement
+local STAND_DISTANCE = 4          -- how far from the target you stand (for resources)
+local MOB_HEIGHT_OFFSET = 6       -- how high above the mob you hover
+local MOB_SIDE_OFFSET = 4         -- how far to the side of the mob you hover
+local REPOSITION_DIST = 8         -- re-tween if the mob gets farther than this
+local CLOSE_PROXIMITY = 2.5       -- re-tween if the mob gets too close
+local TWEEN_SPEED = 20            -- studs per second for smooth sliding movement
 local SWING_DELAY = 0
 local TOGGLE_KEY = Enum.KeyCode.K
 local SKIP_KEY = Enum.KeyCode.J
@@ -148,8 +149,8 @@ local function equip(slot)
 	task.wait(0.3)
 end
 
--- Smoothly tween (slide) to the target position instead of instant teleporting
-local function slideToNear(mode, entry)
+-- Smoothly tween to position (Hovering above/side for mobs, ground snapping for resources)
+local function moveToTarget(mode, entry)
 	local char = player.Character
 	local root = getRoot()
 	local hum = getHumanoid()
@@ -161,57 +162,61 @@ local function slideToNear(mode, entry)
 		activeTween = nil
 	end
 
-	local away = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
-	if away.Magnitude < 0.1 then
-		away = Vector3.new(1, 0, 0)
+	local endCFrame
+
+	if shownTab == "Mobs" then
+		-- Hover above and slightly to the side of the mob, looking down at it
+		local hoverPos = targetPos + Vector3.new(MOB_SIDE_OFFSET, MOB_HEIGHT_OFFSET, MOB_SIDE_OFFSET)
+		endCFrame = CFrame.lookAt(hoverPos, targetPos)
 	else
-		away = away.Unit
-	end
+		-- Ground positioning for resources
+		local away = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
+		if away.Magnitude < 0.1 then
+			away = Vector3.new(1, 0, 0)
+		else
+			away = away.Unit
+		end
 
-	local sideVec = Vector3.new(-away.Z, 0, away.X)
-	local standXZ = targetPos + (away * STAND_DISTANCE) + (sideVec * SIDE_OFFSET)
+		local sideVec = Vector3.new(-away.Z, 0, away.X)
+		local standXZ = targetPos + (away * STAND_DISTANCE) + (sideVec * 2)
 
-	local ignore = { char, entry }
-	if mode.excludeFolder then
-		table.insert(ignore, mode.folder)
-	end
+		local ignore = { char, entry }
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		params.IgnoreWater = true
 
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.IgnoreWater = true
+		local groundY = targetPos.Y
+		local rayOrigin = Vector3.new(standXZ.X, targetPos.Y + 6, standXZ.Z)
+		local rayDirection = Vector3.new(0, -25, 0)
 
-	local groundY = targetPos.Y
-	local rayOrigin = Vector3.new(standXZ.X, targetPos.Y + 6, standXZ.Z)
-	local rayDirection = Vector3.new(0, -25, 0)
-
-	for i = 1, 3 do
-		params.FilterDescendantsInstances = ignore
-		local hit = workspace:Raycast(rayOrigin, rayDirection, params)
-		if hit then
-			local hitPart = hit.Instance
-			local nameLower = hitPart.Name:lower()
-			if nameLower:find("tree") or nameLower:find("leaf") or nameLower:find("branch") or nameLower:find("foliage") then
-				table.insert(ignore, hitPart)
+		for i = 1, 3 do
+			params.FilterDescendantsInstances = ignore
+			local hit = workspace:Raycast(rayOrigin, rayDirection, params)
+			if hit then
+				local hitPart = hit.Instance
+				local nameLower = hitPart.Name:lower()
+				if nameLower:find("tree") or nameLower:find("leaf") or nameLower:find("branch") or nameLower:find("foliage") then
+					table.insert(ignore, hitPart)
+				else
+					groundY = hit.Position.Y
+					break
+				end
 			else
-				groundY = hit.Position.Y
 				break
 			end
-		else
-			break
 		end
+
+		local y = groundY + hum.HipHeight + (root.Size.Y / 2) + 0.2
+		if hum.RigType == Enum.HumanoidRigType.R6 then
+			y = y + 2
+		end
+
+		local standPos = Vector3.new(standXZ.X, y, standXZ.Z)
+		endCFrame = CFrame.lookAt(standPos, Vector3.new(targetPos.X, y, targetPos.Z))
 	end
 
-	local y = groundY + hum.HipHeight + (root.Size.Y / 2) + 0.2
-	if hum.RigType == Enum.HumanoidRigType.R6 then
-		y = y + 2
-	end
-
-	local standPos = Vector3.new(standXZ.X, y, standXZ.Z)
-	local endCFrame = CFrame.lookAt(standPos, Vector3.new(targetPos.X, y, targetPos.Z))
-
-	-- For Mobs, tween smoothly; for Resources, instant snap is fine
 	if shownTab == "Mobs" then
-		local distance = (root.Position - standPos).Magnitude
+		local distance = (root.Position - endCFrame.Position).Magnitude
 		local duration = math.clamp(distance / TWEEN_SPEED, 0.05, 0.8)
 		
 		activeTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = endCFrame})
@@ -224,13 +229,18 @@ local function slideToNear(mode, entry)
 	root.AssemblyLinearVelocity = Vector3.zero
 end
 
--- Continuously lock rotation to look directly at the target mob
+-- Continuously lock rotation to look directly at the target mob from above
 local function lookAtTarget(targetPos)
 	local root = getRoot()
 	if not root or not targetPos then return end
-	local currentPos = root.Position
-	if (currentPos - targetPos).Magnitude > 0.1 then
-		root.CFrame = CFrame.lookAt(currentPos, Vector3.new(targetPos.X, currentPos.Y, targetPos.Z))
+	if shownTab == "Mobs" then
+		local hoverPos = targetPos + Vector3.new(MOB_SIDE_OFFSET, MOB_HEIGHT_OFFSET, MOB_SIDE_OFFSET)
+		root.CFrame = CFrame.lookAt(hoverPos, targetPos)
+	else
+		local currentPos = root.Position
+		if (currentPos - targetPos).Magnitude > 0.1 then
+			root.CFrame = CFrame.lookAt(currentPos, Vector3.new(targetPos.X, currentPos.Y, targetPos.Z))
+		end
 	end
 end
 
@@ -299,7 +309,7 @@ local function farmLoop(id, modeName)
 
 			equip(mode.tool(entry))
 			if not alive() then break end
-			slideToNear(mode, entry)
+			moveToTarget(mode, entry)
 
 			local started = os.clock()
 			while alive() and mode.isValid(entry) and not skipRequested and getRoot() do
@@ -311,7 +321,7 @@ local function farmLoop(id, modeName)
 				if not swingTarget then break end
 				
 				if needsReposition(mode, entry) then
-					slideToNear(mode, entry)
+					moveToTarget(mode, entry)
 				end
 				
 				local targetPos = mode.position(entry)
