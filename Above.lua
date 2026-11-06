@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -17,8 +18,9 @@ local ResourceField = Hub:WaitForChild("ResourceField")
 ----------------------------------------------------------------
 local STAND_DISTANCE = 4          -- how far from the target you stand (studs)
 local SIDE_OFFSET = 2             -- shifts you slightly to the side so the target is in front of you
-local REPOSITION_DIST = 8         -- re-teleport if the target gets farther than this (moving mobs)
-local CLOSE_PROXIMITY = 2.5       -- re-teleport if a mob gets closer than this to you (stops crowding)
+local REPOSITION_DIST = 8         -- re-tween if the target gets farther than this (moving mobs)
+local CLOSE_PROXIMITY = 2.5       -- re-tween if a mob gets closer than this to you (stops crowding)
+local TWEEN_SPEED = 16            -- studs per second for smooth sliding movement
 local SWING_DELAY = 0
 local TOGGLE_KEY = Enum.KeyCode.K
 local SKIP_KEY = Enum.KeyCode.J
@@ -50,6 +52,7 @@ local cooldowns = {}    -- resources we gave up on for a while
 local equipped = nil    -- last slot we equipped
 local pages, tabs = {}, {}
 local filterButtons = {}
+local activeTween = nil
 
 -- Drop loop state
 local dropEnabled = false
@@ -145,13 +148,18 @@ local function equip(slot)
 	task.wait(0.3)
 end
 
--- Ground snapping that avoids tree branches and cave roofs
-local function placeNear(mode, entry)
+-- Smoothly tween (slide) to the target position instead of instant teleporting
+local function slideToNear(mode, entry)
 	local char = player.Character
 	local root = getRoot()
 	local hum = getHumanoid()
 	local targetPos = mode.position(entry)
 	if not (char and root and hum and targetPos) then return end
+
+	if activeTween then
+		activeTween:Cancel()
+		activeTween = nil
+	end
 
 	local away = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
 	if away.Magnitude < 0.1 then
@@ -199,11 +207,24 @@ local function placeNear(mode, entry)
 	end
 
 	local standPos = Vector3.new(standXZ.X, y, standXZ.Z)
-	root.CFrame = CFrame.lookAt(standPos, Vector3.new(targetPos.X, y, targetPos.Z))
+	local endCFrame = CFrame.lookAt(standPos, Vector3.new(targetPos.X, y, targetPos.Z))
+
+	-- For Mobs, tween smoothly; for Resources, instant snap is fine
+	if shownTab == "Mobs" then
+		local distance = (root.Position - standPos).Magnitude
+		local duration = math.clamp(distance / TWEEN_SPEED, 0.05, 0.8)
+		
+		activeTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = endCFrame})
+		activeTween:Play()
+		task.wait(duration)
+	else
+		root.CFrame = endCFrame
+	end
+	
 	root.AssemblyLinearVelocity = Vector3.zero
 end
 
--- Forces character to look directly at the target position before attacking
+-- Continuously lock rotation to look directly at the target mob
 local function lookAtTarget(targetPos)
 	local root = getRoot()
 	if not root or not targetPos then return end
@@ -213,15 +234,12 @@ local function lookAtTarget(targetPos)
 	end
 end
 
--- Checks if target moved too far OR got too close (crowding prevention)
 local function needsReposition(mode, entry)
 	local root = getRoot()
 	local pos = mode.position(entry)
 	if not (root and pos) then return false end
 	local d = root.Position - pos
 	local xzDist = Vector3.new(d.X, 0, d.Z).Magnitude
-	
-	-- Reposition if they walked too far away OR jumped too close into you (< CLOSE_PROXIMITY)
 	return xzDist > REPOSITION_DIST or xzDist < CLOSE_PROXIMITY
 end
 
@@ -281,7 +299,7 @@ local function farmLoop(id, modeName)
 
 			equip(mode.tool(entry))
 			if not alive() then break end
-			placeNear(mode, entry)
+			slideToNear(mode, entry)
 
 			local started = os.clock()
 			while alive() and mode.isValid(entry) and not skipRequested and getRoot() do
@@ -292,9 +310,8 @@ local function farmLoop(id, modeName)
 				local swingTarget = mode.swingTarget(entry)
 				if not swingTarget then break end
 				
-				-- If the mob jumps too close to you or runs away, instantly snap back into position
 				if needsReposition(mode, entry) then
-					placeNear(mode, entry)
+					slideToNear(mode, entry)
 				end
 				
 				local targetPos = mode.position(entry)
@@ -329,6 +346,10 @@ local function setEnabled(modeName, state)
 	cooldowns = {}
 	equipped = nil
 	currentTarget = nil
+	if activeTween then
+		activeTween:Cancel()
+		activeTween = nil
+	end
 
 	for name, p in pairs(pages) do
 		if name ~= "Drop" then
