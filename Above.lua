@@ -144,7 +144,7 @@ local function equip(slot)
 	task.wait(0.3)
 end
 
--- Stands a little to the side so the target stays right in front of you
+-- Smarter ground snapping that avoids tree branches and cave roofs
 local function placeNear(mode, entry)
 	local char = player.Character
 	local root = getRoot()
@@ -159,25 +159,41 @@ local function placeNear(mode, entry)
 		away = away.Unit
 	end
 
-	-- Compute a perpendicular vector to create a slight side-step offset
 	local sideVec = Vector3.new(-away.Z, 0, away.X)
 	local standXZ = targetPos + (away * STAND_DISTANCE) + (sideVec * SIDE_OFFSET)
 
+	-- Collect instances to ignore during raycasting (character, target, and any tree branches directly overhead)
 	local ignore = { char, entry }
 	if mode.excludeFolder then
 		table.insert(ignore, mode.folder)
 	end
-	
+
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = ignore
 	params.IgnoreWater = true
 
-	local rayOrigin = Vector3.new(standXZ.X, targetPos.Y + 50, standXZ.Z)
-	local rayDirection = Vector3.new(0, -300, 0)
-	local hit = workspace:Raycast(rayOrigin, rayDirection, params)
+	local groundY = targetPos.Y
+	local rayOrigin = Vector3.new(standXZ.X, targetPos.Y + 6, standXZ.Z) -- Start low (6 studs above target base) to stay under tree canopies/roofs
+	local rayDirection = Vector3.new(0, -25, 0)
 
-	local groundY = hit and hit.Position.Y or targetPos.Y
+	-- Loop raycasting to skip tree leaves/branches if they accidentally block the ray
+	for i = 1, 3 do
+		params.FilterDescendantsInstances = ignore
+		local hit = workspace:Raycast(rayOrigin, rayDirection, params)
+		if hit then
+			local hitPart = hit.Instance
+			local nameLower = hitPart.Name:lower()
+			-- If it hits a tree or leaves, ignore it and raycast through it
+			if nameLower:find("tree") or nameLower:find("leaf") or nameLower:find("branch") or nameLower:find("foliage") then
+				table.insert(ignore, hitPart)
+			else
+				groundY = hit.Position.Y
+				break
+			end
+		else
+			break
+		end
+	end
 
 	local y = groundY + hum.HipHeight + (root.Size.Y / 2) + 0.2
 	if hum.RigType == Enum.HumanoidRigType.R6 then
