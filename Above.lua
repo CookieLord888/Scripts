@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
@@ -19,7 +20,7 @@ local ResourceField = Hub:WaitForChild("ResourceField")
 local STAND_DISTANCE = 4          -- how far from the target you stand (resources)
 local SIDE_OFFSET = 2             -- shifts you slightly to the side (resources)
 local MOB_HEIGHT_OFFSET = 8       -- safe height above the slime so you don't die
-local REPOSITION_DIST = 10        -- re-position if the slime moves too far
+local REPOSITION_DIST = 12        -- re-tween if the slime teleports/dashes far away
 local TWEEN_SPEED = 24            -- studs per second for smooth movement
 local SWING_DELAY_MOBS = 0.1      -- delay between swings for mobs
 local SWING_DELAY_RES = 0         -- delay between swings for resources
@@ -54,31 +55,13 @@ local equipped = nil    -- last slot we equipped
 local pages, tabs = {}, {}
 local filterButtons = {}
 local activeTween = nil
+local hoverConn = nil
+local flyForce = nil
 
 -- Drop loop state
 local dropEnabled = false
 local dropItemName = "IronOre"
 local dropSpeed = 0.1
-
-----------------------------------------------------------------
--- Fly Control Helpers (Turns built-in/custom Fly on/off)
-----------------------------------------------------------------
-local function setFlyEnabled(state)
-	local char = player.Character
-	if not char then return end
-	
-	-- Checks common remote names or attributes for enabling flight in games
-	local flyRemote = Remotes:FindFirstChild("RequestFly") or Remotes:FindFirstChild("Fly") or Remotes:FindFirstChild("ToggleFly")
-	if flyRemote then
-		pcall(function()
-			flyRemote:FireServer(state)
-		end)
-	end
-
-	-- Alternative fallback: toggle custom BodyVelocity/BodyPosition float if needed, 
-	-- or toggle standard game state attributes if used by the server
-	char:SetAttribute("Flying", state)
-end
 
 ----------------------------------------------------------------
 -- Helpers
@@ -167,6 +150,82 @@ local MODES = {
 	},
 }
 
+-- Calculates a clean CFrame directly above the slime without gimbal-lock jitter
+local function getMobHoverCFrame(targetPos)
+	-- Tiny 0.25 stud horizontal offset prevents CFrame.lookAt from flipping when looking straight down
+	local hoverPos = targetPos + Vector3.new(0, MOB_HEIGHT_OFFSET, 0.25)
+	return CFrame.lookAt(hoverPos, targetPos)
+end
+
+----------------------------------------------------------------
+-- Fly & Anti-Jitter Lock
+----------------------------------------------------------------
+local function setFlyEnabled(state)
+	local char = player.Character
+	local root = getRoot()
+	local hum = getHumanoid()
+
+	-- Fire game remote if one exists
+	local flyRemote = Remotes:FindFirstChild("RequestFly") or Remotes:FindFirstChild("Fly") or Remotes:FindFirstChild("ToggleFly")
+	if flyRemote then
+		pcall(function()
+			flyRemote:FireServer(state)
+		end)
+	end
+	if char then
+		char:SetAttribute("Flying", state)
+	end
+
+	-- Clean up any existing fly force or heartbeat lock
+	if hoverConn then
+		hoverConn:Disconnect()
+		hoverConn = nil
+	end
+	if flyForce then
+		flyForce:Destroy()
+		flyForce = nil
+	end
+
+	if state and root then
+		-- Zero-velocity BodyVelocity cancels gravity completely so you never fall/jitter
+		local bv = Instance.new("BodyVelocity")
+		bv.Name = "MobHoverFly"
+		bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+		bv.Velocity = Vector3.zero
+		bv.Parent = root
+		flyForce = bv
+
+		if hum then
+			hum.PlatformStand = true
+		end
+
+		-- Smoothly lock position & rotation every frame while hovering above the active mob
+		hoverConn = RunService.Heartbeat:Connect(function()
+			if not enabled or shownTab ~= "Mobs" then return end
+			local r = getRoot()
+			if not r then return end
+			r.AssemblyLinearVelocity = Vector3.zero
+			r.AssemblyAngularVelocity = Vector3.zero
+
+			-- Only lock once the initial tween to the target has finished
+			if not activeTween and currentTarget and mobAlive(currentTarget) then
+				local targetPos = MODES.Mobs.position(currentTarget)
+				if targetPos then
+					r.CFrame = getMobHoverCFrame(targetPos)
+				end
+			end
+		end)
+	else
+		if hum then
+			hum.PlatformStand = false
+		end
+		if root then
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.AssemblyAngularVelocity = Vector3.zero
+		end
+	end
+end
+
 local function equip(slot)
 	if not slot or slot == equipped then return end
 	EquipEvent:FireServer(slot)
@@ -190,10 +249,7 @@ local function moveToTarget(mode, entry)
 	local endCFrame
 
 	if shownTab == "Mobs" then
-		-- Position directly above the slime with a safe height offset so you don't take damage
-		local hoverPos = targetPos + Vector3.new(0, MOB_HEIGHT_OFFSET, 0)
-		-- Look down and slightly across at the slime
-		endCFrame = CFrame.lookAt(hoverPos, targetPos)
+		endCFrame = getMobHoverCFrame(targetPos)
 	else
 		-- Ground positioning for resources
 		local away = Vector3.new(root.Position.X - targetPos.X, 0, root.Position.Z - targetPos.Z)
@@ -244,20 +300,22 @@ local function moveToTarget(mode, entry)
 	local distance = (root.Position - endCFrame.Position).Magnitude
 	local duration = math.clamp(distance / TWEEN_SPEED, 0.02, 0.6)
 	
-	activeTween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = endCFrame})
-	activeTween:Play()
+	local tween = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), {CFrame = endCFrame})
+	activeTween = tween
+	tween:Play()
 	task.wait(duration)
+	if activeTween == tween then
+		activeTween = nil
+	end
 	
 	root.AssemblyLinearVelocity = Vector3.zero
 end
 
--- Continuously lock rotation to face the target on every attack
 local function lookAtTarget(targetPos)
 	local root = getRoot()
 	if not root or not targetPos then return end
 	if shownTab == "Mobs" then
-		local hoverPos = targetPos + Vector3.new(0, MOB_HEIGHT_OFFSET, 0)
-		root.CFrame = CFrame.lookAt(hoverPos, targetPos)
+		root.CFrame = getMobHoverCFrame(targetPos)
 	else
 		local currentPos = root.Position
 		if (currentPos - targetPos).Magnitude > 0.1 then
@@ -319,7 +377,6 @@ local function farmLoop(id, modeName)
 		return enabled and id == runId
 	end
 
-	-- Turn Fly ON when starting Mob farming
 	if modeName == "Mobs" then
 		setFlyEnabled(true)
 	end
@@ -331,12 +388,13 @@ local function farmLoop(id, modeName)
 			status.Text = "Waiting for targets..."
 			task.wait(0.5)
 		else
-			currentTarget = entry
+			currentTarget = nil -- keep nil during initial tween so Heartbeat doesn't fight the tween
 			status.Text = "Target: " .. entry.Name
 
 			equip(mode.tool(entry))
 			if not alive() then break end
 			moveToTarget(mode, entry)
+			currentTarget = entry
 
 			local started = os.clock()
 			while alive() and mode.isValid(entry) and not skipRequested and getRoot() do
@@ -348,7 +406,9 @@ local function farmLoop(id, modeName)
 				if not swingTarget then break end
 				
 				if needsReposition(mode, entry) then
+					currentTarget = nil
 					moveToTarget(mode, entry)
+					currentTarget = entry
 				end
 				
 				local targetPos = mode.position(entry)
@@ -362,6 +422,8 @@ local function farmLoop(id, modeName)
 				task.wait(currentDelay)
 			end
 
+			currentTarget = nil
+
 			if skipRequested then
 				skipRequested = false
 				if mode.isValid(entry) then
@@ -372,7 +434,6 @@ local function farmLoop(id, modeName)
 		end
 	end
 
-	-- Turn Fly OFF when mob farming stops
 	if modeName == "Mobs" then
 		setFlyEnabled(false)
 	end
@@ -395,7 +456,6 @@ local function setEnabled(modeName, state)
 		activeTween = nil
 	end
 
-	-- Ensure fly is turned off when disabled
 	setFlyEnabled(false)
 
 	for name, p in pairs(pages) do
@@ -670,6 +730,10 @@ end)
 
 player.CharacterAdded:Connect(function()
 	equipped = nil
+	if enabled and shownTab == "Mobs" then
+		task.wait(0.2)
+		setFlyEnabled(true)
+	end
 end)
 
 showTab("Mobs")
