@@ -154,7 +154,7 @@ local function equip(slot)
 	task.wait(0.3)
 end
 
--- Smoothly tween/slide on the floor near the target
+-- Smoothly tween/slide on CommandLine/floor near the target
 local function moveToTarget(mode, entry)
 	local char = player.Character
 	local root = getRoot()
@@ -215,7 +215,6 @@ local function moveToTarget(mode, entry)
 	local standPos = Vector3.new(standXZ.X, y, standXZ.Z)
 	local endCFrame = CFrame.lookAt(standPos, Vector3.new(targetPos.X, y, targetPos.Z))
 
-	-- Smooth tween slide for both Mobs and Resources on the floor
 	local distance = (root.Position - endCFrame.Position).Magnitude
 	local duration = math.clamp(distance / TWEEN_SPEED, 0.02, 0.6)
 	
@@ -289,6 +288,12 @@ local function farmLoop(id, modeName)
 		return enabled and id == runId
 	end
 
+	-- Set PlatformStand to true while farming Mobs
+	local hum = getHumanoid()
+	if hum and modeName == "Mobs" then
+		hum.PlatformStand = true
+	end
+
 	while alive() do
 		local entry = pickTarget(mode)
 		if not entry then
@@ -323,7 +328,6 @@ local function farmLoop(id, modeName)
 
 				SwingEvent:FireServer(swingTarget)
 				
-				-- Apply specific swing delays per mode
 				local currentDelay = (shownTab == "Mobs") and SWING_DELAY_MOBS or SWING_DELAY_RES
 				task.wait(currentDelay)
 			end
@@ -336,6 +340,12 @@ local function farmLoop(id, modeName)
 			end
 			task.wait()
 		end
+	end
+
+	-- Reset PlatformStand when loop exits
+	local currentHum = getHumanoid()
+	if currentHum then
+		currentHum.PlatformStand = false
 	end
 
 	if id == runId then
@@ -354,6 +364,12 @@ local function setEnabled(modeName, state)
 	if activeTween then
 		activeTween:Cancel()
 		activeTween = nil
+	end
+
+	-- Make sure PlatformStand is reset if toggled off
+	local hum = getHumanoid()
+	if hum then
+		hum.PlatformStand = false
 	end
 
 	for name, p in pairs(pages) do
